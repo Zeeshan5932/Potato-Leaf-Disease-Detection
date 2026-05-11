@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Potato Leaf Disease Detection</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<main class="page-shell">
+    <header class="topbar">
+        <div class="brand-wrap">
+            <span class="brand-dot" aria-hidden="true"></span>
+            <p class="brand-name">LeafScope</p>
+        </div>
+        <p class="brand-subtitle">Potato leaf health scanner</p>
+    </header>
+
+    <section class="hero-card">
+        <div class="hero-copy">
+            <p class="eyebrow">Potato disease detector</p>
+            <h1>Find potato leaf disease in one upload.</h1>
+            <p class="lede">Upload a clear leaf photo and the model will classify it as Early Blight, Late Blight, or Healthy with a confidence score.</p>
+
+            <div class="meta-row">
+                <span class="meta-pill">Model: <span id="modelName">potato_disease_model</span></span>
+                <span class="meta-pill">Classes: 3</span>
+            </div>
+
+            <div class="tip-card">
+                <p class="tip-title">For best accuracy</p>
+                <ul class="tip-list">
+                    <li>Use natural light and avoid blur.</li>
+                    <li>Keep one leaf centered in frame.</li>
+                    <li>Avoid heavy shadows or background clutter.</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="upload-card">
+            <form action="/predict-json" method="post" enctype="multipart/form-data" class="upload-form" id="uploadForm">
+                <label for="file" class="dropzone" id="dropzone">
+                    <div class="dropzone-copy">
+                        <span class="dropzone-title">Choose a leaf image</span>
+                        <span class="dropzone-subtitle">Drag and drop or click to browse</span>
+                        <span class="dropzone-badge">PNG, JPG, JPEG, WEBP</span>
+                    </div>
+                    <input type="file" id="file" name="file" accept="image/*" required>
+                </label>
+
+                <div class="preview-panel">
+                    <div class="preview-frame">
+                        <img id="previewImage" alt="Selected leaf preview" src="" class="preview-image hidden">
+                        <div id="previewPlaceholder" class="preview-placeholder">
+                            <span>No image selected yet</span>
+                        </div>
+                    </div>
+                    <p id="fileName" class="file-name">No file chosen</p>
+                </div>
+
+                <button type="submit" class="primary-btn" id="submitBtn">
+                    <span id="submitText">Predict Disease</span>
+                </button>
+            </form>
+        </div>
+    </section>
+
+    <section class="result-grid">
+        <article class="result-card neutral-card" id="resultCard">
+            <p class="result-label" id="resultLabel">Ready to scan</p>
+            <h2 id="resultTitle">Upload an image to see prediction.</h2>
+            <p class="result-text" id="resultText">Your result card will appear here after pressing Predict Disease.</p>
+            <p class="support-text hidden" id="resultFile"></p>
+        </article>
+    </section>
+</main>
+
+<script>
+    const uploadForm = document.getElementById('uploadForm');
+    const dropzone = document.getElementById('dropzone');
+    const fileInput = document.getElementById('file');
+    const previewImage = document.getElementById('previewImage');
+    const previewPlaceholder = document.getElementById('previewPlaceholder');
+    const fileName = document.getElementById('fileName');
+    const submitBtn = document.getElementById('submitBtn');
+    const submitText = document.getElementById('submitText');
+    const modelName = document.getElementById('modelName');
+    const resultCard = document.getElementById('resultCard');
+    const resultLabel = document.getElementById('resultLabel');
+    const resultTitle = document.getElementById('resultTitle');
+    const resultText = document.getElementById('resultText');
+    const resultFile = document.getElementById('resultFile');
+
+    const buildPredictUrlCandidates = () => {
+        const candidates = [];
+        const pushUnique = (url) => {
+            if (url && !candidates.includes(url)) {
+                candidates.push(url);
+            }
+        };
+
+        const isHttp = window.location.protocol === 'http:' || window.location.protocol === 'https:';
+
+        if (isHttp && window.location.origin && window.location.origin !== 'null') {
+            pushUnique(`${window.location.origin}/predict-json`);
+        }
+
+        // Fallbacks for file://, Live Server, or wrong origin modes.
+        pushUnique('http://127.0.0.1:8000/predict-json');
+        pushUnique('http://127.0.0.1:8011/predict-json');
+        pushUnique('http://localhost:8000/predict-json');
+        pushUnique('http://localhost:8011/predict-json');
+
+        return candidates;
+    };
+
+    const predictUrls = buildPredictUrlCandidates();
+
+    const postPredictionWithFallback = async (formData) => {
+        let bestErrorMessage = 'Cannot connect to server. Start FastAPI and try again.';
+
+        for (const predictUrl of predictUrls) {
+            try {
+                const response = await fetch(predictUrl, {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                const contentType = response.headers.get('content-type') || '';
+                if (!contentType.includes('application/json')) {
+                    // Usually indicates wrong origin/server (e.g., static preview server).
+                    bestErrorMessage = `Unexpected server response (${response.status}) from ${predictUrl}.`;
+                    continue;
+                }
+
+                const data = await response.json();
+
+                if (response.status === 404 || response.status === 405) {
+                    bestErrorMessage = `Server at ${predictUrl} does not support prediction route.`;
+                    continue;
+                }
+
+                return { response, data, predictUrl };
+            } catch (error) {
+                if (error && error.message) {
+                    bestErrorMessage = error.message;
+                }
+            }
+        }
+
+        throw new Error(bestErrorMessage);
+    };
+
+    const setNeutralState = () => {
+        resultCard.classList.remove('success', 'error-card');
+        resultCard.classList.add('neutral-card');
+        resultLabel.textContent = 'Ready to scan';
+        resultTitle.textContent = 'Upload an image to see prediction.';
+        resultText.textContent = 'Your result card will appear here after pressing Predict Disease.';
+        resultFile.classList.add('hidden');
+        resultFile.textContent = '';
+    };
+
+    const setSuccessState = (data) => {
+        resultCard.classList.remove('neutral-card', 'error-card');
+        resultCard.classList.add('success');
+        resultLabel.textContent = 'Prediction result';
+        resultTitle.textContent = data.prediction || 'Prediction complete';
+        const statusText = data.status || 'Unknown';
+        resultText.innerHTML = `Confidence: <strong>${data.confidence}%</strong><br>Status: <strong>${statusText}</strong>`;
+
+        if (data.uploaded_filename) {
+            resultFile.textContent = `File: ${data.uploaded_filename}`;
+            resultFile.classList.remove('hidden');
+        } else {
+            resultFile.classList.add('hidden');
+            resultFile.textContent = '';
+        }
+    };
+
+    const setErrorState = (errorText) => {
+        resultCard.classList.remove('neutral-card', 'success');
+        resultCard.classList.add('error-card');
+        resultLabel.textContent = 'Upload error';
+        resultTitle.textContent = 'Something went wrong';
+        resultText.textContent = errorText;
+        resultFile.classList.add('hidden');
+        resultFile.textContent = '';
+    };
+
+    setNeutralState();
+
+    const setDropzoneActive = (active) => {
+        dropzone.classList.toggle('dropzone-active', active);
+    };
+
+    ['dragenter', 'dragover'].forEach((eventName) => {
+        dropzone.addEventListener(eventName, (event) => {
+            event.preventDefault();
+            setDropzoneActive(true);
+        });
+    });
+
+    ['dragleave', 'drop'].forEach((eventName) => {
+        dropzone.addEventListener(eventName, (event) => {
+            event.preventDefault();
+            setDropzoneActive(false);
+        });
+    });
+
+    fileInput.addEventListener('change', () => {
+        const file = fileInput.files && fileInput.files[0];
+
+        if (!file) {
+            previewImage.classList.add('hidden');
+            previewPlaceholder.classList.remove('hidden');
+            previewImage.src = '';
+            fileName.textContent = 'No file chosen';
+            return;
+        }
+
+        fileName.textContent = file.name;
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            previewImage.src = event.target.result;
+            previewImage.classList.remove('hidden');
+            previewPlaceholder.classList.add('hidden');
+        };
+        reader.readAsDataURL(file);
+    });
+
+    uploadForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+
+        const file = fileInput.files && fileInput.files[0];
+        if (!file) {
+            setErrorState('Please choose an image before prediction.');
+            return;
+        }
+
+        submitBtn.disabled = true;
+        submitText.textContent = 'Running Prediction...';
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        try {
+            const { response, data } = await postPredictionWithFallback(formData);
+
+            if (data.model_name) {
+                modelName.textContent = data.model_name;
+            }
+
+            if (!response.ok || !data.ok) {
+                setErrorState(data.error || 'Prediction failed.');
+                return;
+            }
+
+            setSuccessState(data);
+        } catch (error) {
+            const readableError = error && error.message
+                ? error.message
+                : 'Cannot connect to server. Start FastAPI and try again.';
+            setErrorState(readableError);
+        } finally {
+            submitBtn.disabled = false;
+            submitText.textContent = 'Predict Disease';
+        }
+    });
+</script>
+
+</body>
+</html>
