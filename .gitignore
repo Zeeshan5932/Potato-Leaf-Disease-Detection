@@ -1,0 +1,4 @@
+# add files which is not push on github
+venv/
+.venv
+pycache/
